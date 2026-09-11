@@ -19,7 +19,8 @@ After installation, mitm6 will be available as a command line program called `mi
 
 ```
 usage: mitm6 [-h] [-i INTERFACE] [-l LOCALDOMAIN] [-4 ADDRESS] [-6 ADDRESS] [-m ADDRESS] [-a] [-r TARGET] [-v] [--debug]
-             [-d DOMAIN] [-b DOMAIN] [-hw DOMAIN] [-hb DOMAIN] [--ignore-nofqdn]
+             [-d DOMAIN] [-b DOMAIN] [-hw DOMAIN] [-hb DOMAIN] [--mac-allowlist MAC] [--mac-blocklist MAC]
+             [--ignore-nofqdn]
 
 mitm6 - pwning IPv4 via IPv6
 For help or reporting issues, visit https://github.com/dirkjanm/mitm6
@@ -51,6 +52,10 @@ Filtering options:
                         Hostname (FQDN) to filter DHCPv6 queries on (Allowlist principle, multiple can be specified.)
   -hb DOMAIN, --host-blocklist DOMAIN, --host-blacklist DOMAIN
                         Hostname (FQDN) to filter DHCPv6 queries on (Blocklist principle, multiple can be specified.)
+  --mac-allowlist MAC, --mac-whitelist MAC
+                        MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
+  --mac-blocklist MAC, --mac-blacklist MAC
+                        MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
   --ignore-nofqdn       Ignore DHCPv6 queries that do not contain the Fully Qualified Domain Name (FQDN) option.
 ```
 
@@ -62,6 +67,14 @@ The same applies for DNS requests, for this the `--domain` option (or `-d`) is a
 
 For both the host and DNS filtering, simple string matching is performed. So if you choose to reply to `wpad`, it will also reply to queries for `wpad.corpdomain.com`. If you want more specific filtering, use both the allowlist and blocklist options, since the blocklist takes precedence over the allowlist.
 By default the first domain specified will be used as the DNS search domain, if you explicitliy want to specify this domain yourself use the `--localdomain` option.
+
+In addition to filtering on hostnames and DNS domains, you can restrict which physical hosts are targeted with the `--mac-allowlist` and `--mac-blocklist` options. These filter on the source MAC address of incoming DHCPv6 packets (Solicit, Request and Renew) and are also applied to DNS replies, so hosts on the blocklist (or not on the allowlist) are never given an IPv6 address or spoofed DNS answers, even if they still query us with cached settings from an earlier run. Multiple entries can be specified by repeating the option (for example `--mac-blocklist aa:bb:cc:dd:ee:ff --mac-blocklist 11:22:33`).
+
+MAC entries are matched based on their length after normalization (separators `:`, `-` and `.` are ignored, matching is case-insensitive, so `AA-BB-CC-DD-EE-FF`, `aabb.ccdd.eeff` and `aabbccddeeff` are all valid formats):
+- A full 6-byte MAC (12 hex characters) is matched **exactly**.
+- A shorter entry is matched as a **substring** of the packet MAC, which makes it easy to target or exclude entire vendor ranges, for example `--mac-blocklist 00:1a:2b` to ignore all Apple devices.
+
+Note that the blocklist takes precedence over the allowlist, just like with the domain filtering. Router Advertisements are sent as multicast and cannot be filtered on MAC address; excluded hosts will simply not receive any DHCPv6 replies.
 
 ## About network impact and restoring the network
 mitm6 is designed as a penetration testing tool and should thus impact the network as little as possible. This is the main reason mitm6 doesn't implement a full machine-in-the-middle attack currently, like we see in for example the SLAAC attack.

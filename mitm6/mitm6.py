@@ -83,6 +83,12 @@ class Config(object):
         # Hostname (DHCPv6 FQDN) allowlist / blocklist options
         self.host_allowlist = [d.lower() for d in args.host_allowlist]
         self.host_blocklist = [d.lower() for d in args.host_blocklist]
+        # MAC address allowlist / blocklist options (normalized to lowercase without separators)
+        self.mac_allowlist = [normalize_mac(m) for m in args.mac_allowlist]
+        self.mac_blocklist = [normalize_mac(m) for m in args.mac_blocklist]
+        for entry in self.mac_allowlist + self.mac_blocklist:
+            if entry and (len(entry) > 12 or not all(c in '0123456789abcdef' for c in entry)):
+                print('Warning: MAC filter entry "%s" does not look like a valid (partial) MAC address, it will never match.' % entry)
         # Should DHCPv6 queries that do not specify a FQDN be ignored?
         self.ignore_nofqdn = args.ignore_nofqdn
         # Local domain to advertise
@@ -242,6 +248,27 @@ def matches_list(value, target_list):
             return True
     return False
 
+# Normalize a MAC address to a lowercase form without separators
+def normalize_mac(mac):
+    testvalue = str(mac).lower().strip()
+    for sep in (':', '-', '.'):
+        testvalue = testvalue.replace(sep, '')
+    return testvalue
+
+# Check whether a normalized packet MAC matches any entry in the list.
+# Entries of 12 hex chars (a full MAC) must match exactly, shorter entries
+# are matched as substrings (useful for targeting vendor OUI prefixes).
+def matches_mac(mac, target_list):
+    testmac = normalize_mac(mac)
+    for test in target_list:
+        normalized = normalize_mac(test)
+        if len(normalized) == 12:
+            if testmac == normalized:
+                return True
+        elif normalized in testmac:
+            return True
+    return False
+
 # Should we spoof the queried name?
 def should_spoof_dns(dnsname):
     # If allowlist exists, host should match
@@ -269,6 +296,21 @@ def should_spoof_dhcpv6(fqdn):
         return False
     return True
 
+# Should we interact with this host at all (DHCPv6 and DNS), based on its MAC address?
+def should_spoof_mac(mac):
+    testmac = normalize_mac(mac)
+    # If allowlist exists, MAC should match
+    if config.mac_allowlist and not matches_mac(testmac, config.mac_allowlist):
+        if config.debug or config.verbose:
+            print('Ignoring packet from %s: MAC not in allowlist' % mac)
+        return False
+    # If there are any entries in the blocklist, make sure it doesnt match against any
+    if matches_mac(testmac, config.mac_blocklist):
+        if config.debug or config.verbose:
+            print('Ignoring packet from %s: MAC matches blocklist' % mac)
+        return False
+    return True
+
 # Get a target object if it exists, otherwise, create it
 def get_target(p):
     mac = p.src
@@ -286,15 +328,21 @@ def get_target(p):
 # Parse a packet
 def parsepacket(p):
     if DHCP6_Solicit in p:
+        if not should_spoof_mac(p.src):
+            return
         target = get_target(p)
         if should_spoof_dhcpv6(target.host):
             send_dhcp_advertise(p[DHCP6_Solicit], p, target)
     if DHCP6_Request in p:
+        if not should_spoof_mac(p.src):
+            return
         target = get_target(p)
         if p[DHCP6OptServerId].duid == config.selfduid and should_spoof_dhcpv6(target.host):
             send_dhcp_reply(p[DHCP6_Request], p)
             print('IPv6 address %s is now assigned to %s' % (p[DHCP6OptIA_NA].ianaopts[0].addr, pcdict[p.src]))
     if DHCP6_Renew in p:
+        if not should_spoof_mac(p.src):
+            return
         target = get_target(p)
         if p[DHCP6OptServerId].duid == config.selfduid and should_spoof_dhcpv6(target.host):
             send_dhcp_reply(p[DHCP6_Renew],p)
@@ -305,7 +353,7 @@ def parsepacket(p):
             #Arp is-at package, update internal arp table
             arptable[arpp.hwsrc] = arpp.psrc
     if DNS in p:
-        if p.dst == config.selfmac:
+        if p.dst == config.selfmac and should_spoof_mac(p.src):
             send_dns_reply(p)
 
 def setupFakeDns():
@@ -363,6 +411,8 @@ def main():
     filtergroup.add_argument("-b", "--blocklist", "--blacklist", action='append', default=[], metavar='DOMAIN', help="Domain name to filter DNS queries on (Blocklist principle, multiple can be specified.)")
     filtergroup.add_argument("-hw", "-ha", "--host-allowlist", "--host-whitelist", action='append', default=[], metavar='DOMAIN', help="Hostname (FQDN) to filter DHCPv6 queries on (Allowlist principle, multiple can be specified.)")
     filtergroup.add_argument("-hb", "--host-blocklist", "--host-blacklist", action='append', default=[], metavar='DOMAIN', help="Hostname (FQDN) to filter DHCPv6 queries on (Blocklist principle, multiple can be specified.)")
+    filtergroup.add_argument("--mac-allowlist", "--mac-whitelist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
+    filtergroup.add_argument("--mac-blocklist", "--mac-blacklist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
     filtergroup.add_argument("--ignore-nofqdn", action='store_true', help="Ignore DHCPv6 queries that do not contain the Fully Qualified Domain Name (FQDN) option.")
 
     args = parser.parse_args()
@@ -389,6 +439,10 @@ def main():
         print('Hostname allowlist: %s' % ', '.join(config.host_allowlist))
     if config.host_blocklist:
         print('Hostname blocklist: %s' % ', '.join(config.host_blocklist))
+    if config.mac_allowlist:
+        print('MAC allowlist: %s' % ', '.join(config.mac_allowlist))
+    if config.mac_blocklist:
+        print('MAC blocklist: %s' % ', '.join(config.mac_blocklist))
 
     #Main packet capture thread
     d = threads.deferToThread(sniff, iface=config.default_if, filter="ip6 proto \\udp or arp or udp port 53", prn=lambda x: reactor.callFromThread(parsepacket, x), stop_filter=should_stop)
