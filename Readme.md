@@ -53,9 +53,9 @@ Filtering options:
   -hb DOMAIN, --host-blocklist DOMAIN, --host-blacklist DOMAIN
                         Hostname (FQDN) to filter DHCPv6 queries on (Blocklist principle, multiple can be specified.)
   --mac-allowlist MAC, --mac-whitelist MAC
-                        MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
+                        MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, can be specified multiple times. Also accepts comma-separated lists or a file with one MAC per line (existing paths are read automatically, or force with @path, # comments allowed). Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
   --mac-blocklist MAC, --mac-blacklist MAC
-                        MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
+                        MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, can be specified multiple times. Also accepts comma-separated lists or a file with one MAC per line (existing paths are read automatically, or force with @path, # comments allowed). Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)
   --ignore-nofqdn       Ignore DHCPv6 queries that do not contain the Fully Qualified Domain Name (FQDN) option.
 ```
 
@@ -68,7 +68,12 @@ The same applies for DNS requests, for this the `--domain` option (or `-d`) is a
 For both the host and DNS filtering, simple string matching is performed. So if you choose to reply to `wpad`, it will also reply to queries for `wpad.corpdomain.com`. If you want more specific filtering, use both the allowlist and blocklist options, since the blocklist takes precedence over the allowlist.
 By default the first domain specified will be used as the DNS search domain, if you explicitliy want to specify this domain yourself use the `--localdomain` option.
 
-In addition to filtering on hostnames and DNS domains, you can restrict which physical hosts are targeted with the `--mac-allowlist` and `--mac-blocklist` options. These filter on the source MAC address of incoming DHCPv6 packets (Solicit, Request and Renew) and are also applied to DNS replies, so hosts on the blocklist (or not on the allowlist) are never given an IPv6 address or spoofed DNS answers, even if they still query us with cached settings from an earlier run. Multiple entries can be specified by repeating the option (for example `--mac-blocklist aa:bb:cc:dd:ee:ff --mac-blocklist 11:22:33`).
+In addition to filtering on hostnames and DNS domains, you can restrict which physical hosts are targeted with the `--mac-allowlist` and `--mac-blocklist` options. These filter on the source MAC address of incoming DHCPv6 packets (Solicit, Request and Renew) and are also applied to DNS replies, so hosts on the blocklist (or not on the allowlist) are never given an IPv6 address or spoofed DNS answers, even if they still query us with cached settings from an earlier run.
+
+Entries can be supplied in three ways, which can be freely combined by repeating the option:
+- Single MACs: `--mac-blocklist aa:bb:cc:dd:ee:ff --mac-blocklist 11:22:33`
+- Comma-separated lists: `--mac-blocklist aa:bb:cc:dd:ee:ff,11:22:33,44:55:66`
+- Files: `--mac-blocklist targets.txt`. If the argument points to an existing file, every line is read as an entry (blank lines and `#` comments are ignored, comma-separated entries on a single line also work). To force file parsing even if the path does not exist yet, prefix it with `@`: `--mac-blocklist @targets.txt` (a missing file is treated as an error and mitm6 exits).
 
 MAC entries are matched based on their length after normalization (separators `:`, `-` and `.` are ignored, matching is case-insensitive, so `AA-BB-CC-DD-EE-FF`, `aabb.ccdd.eeff` and `aabbccddeeff` are all valid formats):
 - A full 6-byte MAC (12 hex characters) is matched **exactly**.

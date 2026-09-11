@@ -84,8 +84,16 @@ class Config(object):
         self.host_allowlist = [d.lower() for d in args.host_allowlist]
         self.host_blocklist = [d.lower() for d in args.host_blocklist]
         # MAC address allowlist / blocklist options (normalized to lowercase without separators)
-        self.mac_allowlist = [normalize_mac(m) for m in args.mac_allowlist]
-        self.mac_blocklist = [normalize_mac(m) for m in args.mac_blocklist]
+        self.mac_allowlist = []
+        for entry in parse_mac_entries(args.mac_allowlist):
+            normalized = normalize_mac(entry)
+            if normalized not in self.mac_allowlist:
+                self.mac_allowlist.append(normalized)
+        self.mac_blocklist = []
+        for entry in parse_mac_entries(args.mac_blocklist):
+            normalized = normalize_mac(entry)
+            if normalized not in self.mac_blocklist:
+                self.mac_blocklist.append(normalized)
         for entry in self.mac_allowlist + self.mac_blocklist:
             if entry and (len(entry) > 12 or not all(c in '0123456789abcdef' for c in entry)):
                 print('Warning: MAC filter entry "%s" does not look like a valid (partial) MAC address, it will never match.' % entry)
@@ -269,6 +277,42 @@ def matches_mac(mac, target_list):
             return True
     return False
 
+# Read MAC filter entries from a file. One entry per line, but comma-separated
+# entries on a single line work as well. Empty lines and comments (#) are ignored.
+def read_mac_file(path):
+    try:
+        with open(path, 'r') as macfile:
+            content = macfile.read()
+    except IOError as e:
+        print('Error: could not read MAC list file "%s": %s' % (path, e))
+        sys.exit(1)
+    entries = []
+    for line in content.splitlines():
+        for token in line.split('#')[0].split(','):
+            token = token.strip()
+            if token:
+                entries.append(token)
+    return entries
+
+# Expand the raw values passed on the command line into a flat list of MAC
+# entries. Each value may be a single MAC, a comma-separated list of MACs, or
+# a file with MAC entries (detected automatically if the path exists, or
+# forced by prefixing the path with @).
+def parse_mac_entries(values):
+    entries = []
+    for value in values:
+        for token in value.split(','):
+            token = token.strip()
+            if not token:
+                continue
+            if token.startswith('@'):
+                entries.extend(read_mac_file(token[1:]))
+            elif os.path.isfile(token):
+                entries.extend(read_mac_file(token))
+            else:
+                entries.append(token)
+    return entries
+
 # Should we spoof the queried name?
 def should_spoof_dns(dnsname):
     # If allowlist exists, host should match
@@ -411,8 +455,8 @@ def main():
     filtergroup.add_argument("-b", "--blocklist", "--blacklist", action='append', default=[], metavar='DOMAIN', help="Domain name to filter DNS queries on (Blocklist principle, multiple can be specified.)")
     filtergroup.add_argument("-hw", "-ha", "--host-allowlist", "--host-whitelist", action='append', default=[], metavar='DOMAIN', help="Hostname (FQDN) to filter DHCPv6 queries on (Allowlist principle, multiple can be specified.)")
     filtergroup.add_argument("-hb", "--host-blocklist", "--host-blacklist", action='append', default=[], metavar='DOMAIN', help="Hostname (FQDN) to filter DHCPv6 queries on (Blocklist principle, multiple can be specified.)")
-    filtergroup.add_argument("--mac-allowlist", "--mac-whitelist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
-    filtergroup.add_argument("--mac-blocklist", "--mac-blacklist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, multiple can be specified. Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
+    filtergroup.add_argument("--mac-allowlist", "--mac-whitelist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Allowlist principle, can be specified multiple times. Also accepts comma-separated lists or a file with one MAC per line (existing paths are read automatically, or force with @path, # comments allowed). Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
+    filtergroup.add_argument("--mac-blocklist", "--mac-blacklist", action='append', default=[], metavar='MAC', help="MAC address to filter DHCPv6/DNS traffic on (Blocklist principle, can be specified multiple times. Also accepts comma-separated lists or a file with one MAC per line (existing paths are read automatically, or force with @path, # comments allowed). Full MACs match exactly, partial MACs such as vendor prefixes are matched as substrings.)")
     filtergroup.add_argument("--ignore-nofqdn", action='store_true', help="Ignore DHCPv6 queries that do not contain the Fully Qualified Domain Name (FQDN) option.")
 
     args = parser.parse_args()
